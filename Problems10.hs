@@ -108,7 +108,10 @@ subst x m (Var y)
   | otherwise = Var y
 subst x m (Lam y n) = Lam y (substUnder x m y n)
 subst x m (App n1 n2) = App (subst x m n1) (subst x m n2)
-subst x m n = undefined
+subst x m (Store n) = Store (subst x m n)
+subst _ _ Recall = Recall
+subst x m (Throw n) = Throw (subst x m n)
+subst x m (Catch n y n') = Catch (subst x m n) y (substUnder x m y n')
 
 {-------------------------------------------------------------------------------
 
@@ -202,7 +205,42 @@ bubble; this won't *just* be `Throw` and `Catch.
 -------------------------------------------------------------------------------}
 
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep = undefined
+smallStep (Plus (Const a) (Const b), acc) = Just (Const (a + b), acc)
+smallStep (Plus (Const a) n, acc) = 
+  case smallStep (n, acc) of
+    Just (n', acc') -> Just (Plus (Const a) n', acc')
+    Nothing -> Nothing
+smallStep (Plus n1 n2, acc) = 
+  case smallStep (n1, acc) of
+    Just (n1', acc') -> Just (Plus n1' n2, acc')
+    Nothing -> Nothing
+smallStep (Store (Const v), _) = Just (Const v, Const v)
+smallStep (Store m, acc) = 
+  case smallStep (m, acc) of
+    Just (m', acc') -> Just (Store m', acc')
+    Nothing -> Nothing
+smallStep (Recall, acc) = Just (acc, acc)
+smallStep (Throw (Const v), acc) = Just (Throw (Const v), acc)
+smallStep (Throw m, acc) = 
+  case smallStep (m, acc) of
+    Just (m', acc') -> Just (Throw m', acc')
+    Nothing -> Nothing
+smallStep (Catch (Const v) _ _, acc) = Just (Const v, acc)
+smallStep (Catch (Throw w) y n, acc) = Just (subst y w n, acc)
+smallStep (Catch m y n, acc) = 
+  case smallStep (m, acc) of
+    Just (m', acc') -> Just (Catch m' y n, acc')
+    Nothing -> Nothing
+smallStep (App (Lam x m) n, acc) | isValue n = Just (subst x n m, acc)
+smallStep (App m n, acc) | isValue m = 
+  case smallStep (n, acc) of
+    Just (n', acc') -> Just (App m n', acc')
+    Nothing -> Nothing
+smallStep (App m n, acc) = 
+  case smallStep (m, acc) of
+    Just (m', acc') -> Just (App m' n, acc')
+    Nothing -> Nothing
+smallStep _ = Nothing
 
 steps :: (Expr, Expr) -> [(Expr, Expr)]
 steps s = case smallStep s of
