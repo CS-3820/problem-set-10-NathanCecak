@@ -1,6 +1,5 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Problems10 where
-
 {-------------------------------------------------------------------------------
 
 CS:3820 Fall 2024 Problem Set 10
@@ -31,6 +30,8 @@ accumulator was.
 -------------------------------------------------------------------------------}
 
 -- Here is our expression data type
+import Debug.Trace
+
 
 data Expr = -- Arithmetic
             Const Int | Plus Expr Expr 
@@ -108,10 +109,10 @@ subst x m (Var y)
   | otherwise = Var y
 subst x m (Lam y n) = Lam y (substUnder x m y n)
 subst x m (App n1 n2) = App (subst x m n1) (subst x m n2)
-subst x m (Store n) = Store (subst x m n)
-subst _ _ Recall = Recall
-subst x m (Throw n) = Throw (subst x m n)
-subst x m (Catch n y n') = Catch (subst x m n) y (substUnder x m y n')
+subst x m (Store n) = Store (subst x m n)  -- Substitute for Store
+subst _ _ Recall = Recall  -- Recall does not require substitution
+subst x m (Throw n) = Throw (subst x m n)  -- Substitute for Throw
+subst x m (Catch n y n') = Catch (subst x m n) y (substUnder x m y n')  -- Handle substitution in Catch
 
 {-------------------------------------------------------------------------------
 
@@ -205,47 +206,63 @@ bubble; this won't *just* be `Throw` and `Catch.
 -------------------------------------------------------------------------------}
 
 smallStep :: (Expr, Expr) -> Maybe (Expr, Expr)
-smallStep (Plus (Const a) (Const b), acc) = Just (Const (a + b), acc)
-smallStep (Plus (Const a) n, acc) = 
-  case smallStep (n, acc) of
-    Just (n', acc') -> Just (Plus (Const a) n', acc')
-    Nothing -> Nothing
-smallStep (Plus n1 n2, acc) = 
-  case smallStep (n1, acc) of
-    Just (n1', acc') -> Just (Plus n1' n2, acc')
-    Nothing -> Nothing
-smallStep (Store (Const v), _) = Just (Const v, Const v)
-smallStep (Store m, acc) = 
-  case smallStep (m, acc) of
-    Just (m', acc') -> Just (Store m', acc')
-    Nothing -> Nothing
+
+smallStep (Const i, acc) = Nothing
+
+smallStep (Lam x e, acc) = Nothing
+
+smallStep (Plus e1 e2, acc)
+  | Throw _ <- e1 = Just (e1, acc)
+  | Throw _ <- e2 = Just (e2, acc)
+  | not (isValue e1) = do
+      (e1', acc') <- smallStep (e1, acc)
+      return (Plus e1' e2, acc)
+  | not (isValue e2) = do
+      (e2', acc') <- smallStep (e2, acc)
+      return (Plus e1 e2', acc)
+  | Const i1 <- e1, Const i2 <- e2 = Just (Const (i1 + i2), acc)
+  | otherwise = Nothing
+
+smallStep (App e1 e2, acc)
+  | Throw _ <- e1 = Just (e1, acc)
+  | Throw _ <- e2 = Just (e2, acc)
+  | not (isValue e1) = do
+      (e1', acc') <- smallStep (e1, acc)
+      return (App e1' e2, acc)
+  | not (isValue e2) = do
+      (e2', acc') <- smallStep (e2, acc)
+      return (App e1 e2', acc)
+  | Lam x body <- e1 = Just (subst x e2 body, acc)
+  | otherwise = Nothing
+
+smallStep (Store e, acc)
+  | isValue e = Just (e, e)
+  | otherwise = do
+      (e', acc') <- smallStep (e, acc)
+      return (Store e', acc)
+
 smallStep (Recall, acc) = Just (acc, acc)
-smallStep (Throw (Const v), acc) = Just (Throw (Const v), acc)
-smallStep (Throw m, acc) = 
-  case smallStep (m, acc) of
-    Just (m', acc') -> Just (Throw m', acc')
-    Nothing -> Nothing
-smallStep (Catch (Const v) _ _, acc) = Just (Const v, acc)
-smallStep (Catch (Throw w) y n, acc) = Just (subst y w n, acc)
-smallStep (Catch m y n, acc) = 
-  case smallStep (m, acc) of
-    Just (m', acc') -> Just (Catch m' y n, acc')
-    Nothing -> Nothing
-smallStep (App (Lam x m) n, acc) | isValue n = Just (subst x n m, acc)
-smallStep (App m n, acc) | isValue m = 
-  case smallStep (n, acc) of
-    Just (n', acc') -> Just (App m n', acc')
-    Nothing -> Nothing
-smallStep (App m n, acc) = 
-  case smallStep (m, acc) of
-    Just (m', acc') -> Just (App m' n, acc')
-    Nothing -> Nothing
+
+smallStep (Throw e, acc)
+  | isValue e = Nothing
+  | otherwise = do
+      (e', acc') <- smallStep (e, acc)
+      return (Throw e', acc)
+
+smallStep (Catch m x n, acc)
+  | not (isValue m) = do
+      (m', acc') <- smallStep (m, acc)
+      return (Catch m' x n, acc)
+  | Throw w <- m = Just (subst x w n, acc)
+  | otherwise = Just (m, acc)
+  
 smallStep _ = Nothing
 
 steps :: (Expr, Expr) -> [(Expr, Expr)]
 steps s = case smallStep s of
             Nothing -> [s]
             Just s' -> s : steps s'
+
 
 prints :: Show a => [a] -> IO ()
 prints = mapM_ print
